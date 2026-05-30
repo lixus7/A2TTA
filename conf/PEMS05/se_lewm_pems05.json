@@ -1,0 +1,65 @@
+{
+    "begin_year": 2005,
+    "end_year": 2025,
+    "dropout": 0.0,
+    "lr": 0.03,
+    "batch_size": 128,
+    "epoch": 100,
+    "gpuid": 1,
+    "loss": "mse",
+    "activation": "relu",
+    "scheduler": "epo",
+    "y_len": 12,
+    "x_len": 12,
+    "data_process": 0,
+
+    "raw_data_path": "data/pems05/RawData/",
+    "save_data_path": "data/pems05/FastData/",
+    "graph_path": "data/pems05/graph/",
+    "model_path": "log/PEMS05/",
+    "gcn":{
+        "in_channel": 12,
+        "out_channel": 12,
+        "hidden_channel": 64
+    },
+
+    "tcn":{
+        "in_channel": 1,
+        "out_channel": 1,
+        "kernel_size": 3,
+        "dilation": 1
+    },
+
+    "logname": "se_lewm_pems05",
+    "init": false,
+    "train": 0,
+    "auto_test": 0,
+
+    "strategy": "retrain",
+
+    "detect": false,
+    "ewc": false,
+    "replay": false,
+
+    "se_lewm_defaults": {
+        "z_dim": 64,
+        "latent_hidden_dim": 128,
+        "node_emb_dim": 16,
+        "residual_gate_init": -3.0,
+        "alpha_latent": 0.05,
+        "lambda_sigreg": 0.01,
+        "lambda_delta": 1e-4,
+        "num_projections": 128,
+        "num_knots": 16,
+        "max_sigreg_samples": 4096,
+        "sigreg_on_context": true,
+        "sigreg_on_target": true,
+        "sigreg_on_pred": false,
+        "warmup_epochs": 3,
+        "warmup_lr": 1e-3,
+        "adapt_lr": 3e-4,
+        "adapt_steps": 1,
+        "adapt_every_batches": 1,
+        "candidate_pool_size": 512
+    }
+}

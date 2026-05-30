@@ -1,0 +1,43 @@
+{
+    "begin_year": 2002,
+    "end_year": 2025,
+    "dropout": 0.0,
+    "lr": 0.03,
+    "batch_size": 128,
+    "epoch": 100,
+    "gpuid": 1,
+    "loss": "mse",
+    "activation": "relu",
+    "scheduler": "epo",
+    "y_len": 12,
+    "x_len": 12,
+    "data_process": 0,
+    "raw_data_path": "data/pems12/RawData/",
+    "save_data_path": "data/pems12/FastData/",
+    "graph_path": "data/pems12/graph/",
+    "model_path": "log/PEMS12/",
+    "gcn": {
+        "in_channel": 12,
+        "out_channel": 12,
+        "hidden_channel": 64
+    },
+    "tcn": {
+        "in_channel": 1,
+        "out_channel": 1,
+        "kernel_size": 3,
+        "dilation": 1
+    },
+    "logname": "sttc_pems12",
+    "init": false,
+    "train": 1,
+    "auto_test": 0,
+    "strategy": "retrain",
+    "detect": false,
+    "ewc": false,
+    "replay": false,
+    "method": "STTTC",
+    "use_ttc": 1,
+    "ttc_lr": 0.003,
+    "ttc_groups": 4,
+    "ttc_test_batch_size": 32
+}

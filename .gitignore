@@ -1,0 +1,26 @@
+# ---- Data (large; released separately via cloud disk) ----
+# Keep the directory skeleton (.gitkeep) and processing notebooks, drop tensors.
+*.npz
+*.npy
+*.h5
+*.csv
+
+# ---- Run artifacts ----
+log/
+run_logs/
+nohup.out
+*.log
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---- OS / editor ----
+.DS_Store
+.vscode/
+.idea/
+
+# ---- Keep placeholders ----
+!**/.gitkeep
