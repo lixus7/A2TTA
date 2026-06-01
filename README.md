@@ -204,9 +204,9 @@ Per-year metrics for every baseline are written to
 This benchmark builds on the data and code of several prior works, which we gratefully
 acknowledge:
 
-- **TrafficStream** — [repo](https://github.com/AprLie/TrafficStream)
-- **EAC** (ICLR'25) — [paper](https://openreview.net/pdf?id=FRzCIlkM7I)
-- **STKEC** — [repo](https://github.com/wangbinwu13116175205/STKEC)
+- **TrafficStream** (IJCAI'23) — [paper](https://arxiv.org/abs/2106.06273) · [repo](https://github.com/AprLie/TrafficStream)
+- **EAC** (ICLR'25) — [paper](https://openreview.net/pdf?id=FRzCIlkM7I) · [code](https://github.com/Onedean/EAC)
+- **STKEC** (TITS'23) — [paper](https://ieeexplore.ieee.org/document/10101714/) · [repo](https://github.com/wangbinwu13116175205/STKEC)
 - **ST-TTC** (NeurIPS'25) — [paper](https://arxiv.org/pdf/2506.00635) · [repo](https://github.com/Onedean/ST-TTC)
 - **STRAP** (NeurIPS'25), [paper](https://arxiv.org/abs/2505.19547/) · [repo](https://github.com/HoweyZ/STRAP)
 - **PECPM** (KDD'23), and the conventional backbones GWN / STID /
