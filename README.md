@@ -100,7 +100,11 @@ Core dependencies: `python`, `pytorch`, `torch-geometric`, `networkx`, `scipy`, 
 ### 2. Data
 
 The processed tensors are large and are released separately — see
-**[`data/README.md`](data/README.md)** for the cloud-disk link and the expected layout: https://pan.baidu.com/s/1llz16kYY33TrWlKENNHC5A?pwd=xxtf code: xxtf
+**[`data/README.md`](data/README.md)**
+
+> ☁️ **Cloud-disk download link:** `https://pan.baidu.com/s/1llz16kYY33TrWlKENNHC5A?pwd=xxtf code: xxtf`
+> ☁️ **Raw data Link:**   `https://pan.baidu.com/s/1BPuxL96npWlfRXDv38duww?pwd=xxtf code: xxtf`
+
 Place them under `data/<dataset>/{RawData,FastData,graph}/`; the configs already point there.
 Datasets: **XXL expanding-sensor** benchmarks
 `pems03 … pems12` (2005–2025), where the sensor count grows by up to two orders of magnitude.
