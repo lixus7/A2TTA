@@ -1,0 +1,18 @@
+{
+    "begin_year": 2005,
+    "end_year": 2025,
+    "x_len": 12,
+    "y_len": 12,
+    "days": 31,
+    "raw_data_path": "../xxltrafficdata/preprocessed/pems05/RawData/",
+    "save_data_path": "../xxltrafficdata/preprocessed/pems05/FastData/",
+    "graph_path": "../xxltrafficdata/preprocessed/pems05/graph/",
+    "model_path": "log/PEMS05/",
+    "method": "TimesFM",
+    "logname": "timesfm_pems05",
+    "repo_id": "google/timesfm-2.5-200m-pytorch",
+    "context_len": 32,
+    "horizon_len": 128,
+    "per_core_batch_size": 512,
+    "backend": "gpu"
+}

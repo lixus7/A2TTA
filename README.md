@@ -241,6 +241,7 @@ and `NOHUP=1` to background with a timestamped log under `run_logs/`.
 | **Retrieval / continual (STGNN backbone)** | PECPM, STRAP | `bash scripts/baselines_pems_run.sh` |
 | **Test-time calibration** | ST-TTC | `bash scripts/sttc_run.sh` |
 | **Other static backbones** | GWN, STID, iTransformer, DLinear, STNorm, STAEformer | `bash scripts/extra_baselines_run.sh` |
+| **Foundation models (ZS / FT)** | TimesFM-2.5, Chronos-2, Moirai-MoE, Moirai-2.0 | see [Foundation-model baselines](#-foundation-model-baselines) |
 | **Ours** | A2TTA | `scripts/a2tta_lite_*` (see above) |
 
 `scripts/pemsXX_run.sh` runs the **full per-dataset pipeline** end-to-end (Retrain →
@@ -271,6 +272,39 @@ Per-year metrics for every baseline are written to
 
 ---
 
+## 🤖 Foundation-model baselines
+
+The zero-shot (ZS) and per-year fine-tuned (FT) foundation-model columns of the main table
+(**TimesFM-2.5**, **Chronos-2**, **Moirai-MoE**, **Moirai-2.0**) are run from their own entry
+points, each in a **separate conda env** (their deps conflict with the STGNN stack). Setup and
+usage are documented in [`TIMESFM_README.md`](TIMESFM_README.md) and
+[`MOIRAI_README.md`](MOIRAI_README.md).
+
+| Model | Env setup | Entry (ZS / FT) | Configs |
+|---|---|---|---|
+| **TimesFM-2.5** | `bash scripts/setup_timesfm_env.sh` | `timesfm_main.py` / `timesfm_finetune_main.py` | `conf/PEMS*/timesfm_*.json` (gen: `scripts/gen_timesfm*_configs.py`) |
+| **Moirai-MoE / 2.0** | `bash scripts/setup_moirai_env.sh` | `moirai_main.py` / `moirai_finetune_main.py` | `conf/PEMS*/moirai_*.json` (gen: `scripts/gen_moirai*_configs.py`) |
+| **Chronos-2** | (uses the TimesFM env) | `chronos_baseline.py` / `chronos_finetune.py` | CLI args (no per-dataset JSON) |
+
+```bash
+# TimesFM-2.5 zero-shot on PEMS05
+conda activate timesfm && python timesfm_main.py --conf conf/PEMS05/timesfm_pems05.json --gpuid 0
+# Moirai-MoE zero-shot on PEMS05
+conda activate moirai && python moirai_main.py --conf conf/PEMS05/moirai_moe_pems05.json --gpuid 0
+# Chronos-2 zero-shot (univariate) on PEMS05
+python chronos_baseline.py --dataset PEMS05 --gpuid 0
+```
+
+All FM predictions are scored with the **same `cal_metric`** as every other method, so the
+numbers are directly comparable. Foundation-model columns are **excluded from the best/second
+highlighting** in the tables (they are reference points, not the contribution).
+
+> **Wrappers:** [`src/model/timesfm_wrapper.py`](src/model/timesfm_wrapper.py),
+> [`src/model/moirai_wrapper.py`](src/model/moirai_wrapper.py); TimesFM uses a RevIN patch
+> ([`timesfm_revin_patch.py`](timesfm_revin_patch.py)) to align input normalisation.
+
+---
+
 ## 🙏 Acknowledgements
 
 This benchmark builds on the data and code of several prior works, which we gratefully
@@ -284,6 +318,12 @@ acknowledge:
 - **PECPM** (KDD'23),
 - and the conventional backbones GWN / STID /
   iTransformer / DLinear / ST-Norm / STAEformer.
+
+Foundation-model baselines:
+
+- **TimesFM** — [paper](https://arxiv.org/abs/2310.10688) · [repo](https://github.com/google-research/timesfm)
+- **Chronos** — [paper](https://arxiv.org/abs/2403.07815) · [repo](https://github.com/amazon-science/chronos-forecasting)
+- **Moirai / Moirai-MoE** (uni2ts) — [paper](https://arxiv.org/abs/2402.02592) · [repo](https://github.com/SalesforceAIResearch/uni2ts)
 
 ## License
 

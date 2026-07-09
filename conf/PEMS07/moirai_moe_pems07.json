@@ -1,0 +1,20 @@
+{
+    "begin_year": 2001,
+    "end_year": 2025,
+    "x_len": 12,
+    "y_len": 12,
+    "days": 31,
+    "raw_data_path": "../xxltrafficdata/preprocessed/pems07/RawData/",
+    "save_data_path": "../xxltrafficdata/preprocessed/pems07/FastData/",
+    "graph_path": "../xxltrafficdata/preprocessed/pems07/graph/",
+    "model_path": "log/PEMS07/",
+    "method": "Moirai-moe",
+    "logname": "moirai_moe_pems07",
+    "kind": "moe",
+    "repo_id": "Salesforce/moirai-moe-1.0-R-base",
+    "context_len": 12,
+    "horizon_len": 12,
+    "patch_size": 16,
+    "num_samples": 100,
+    "batch_size": 512
+}
