@@ -1,0 +1,38 @@
+\begin{table}[!h]
+\centering
+\caption{Component ablation. Backbone (frozen) vs.\ adding the warm-up residual calibrator vs.\ adding online delayed-label TTA (Ours). All rows use the tuned config; mean$\pm$std over 5 seeds, averaged over years. \textbf{Bold}: best Avg MAE, \underline{underline}: second best.}
+\label{tab:abl_component}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.1}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Variant} & \textbf{MAE@3} & \textbf{MAE@6} & \textbf{MAE@12} & \textbf{Avg} \\
+\midrule
+\multicolumn{5}{c}{\textbf{PEMS04}} \\
+\midrule
+Backbone (frozen) & 19.34$_{\pm0.19}$ & 20.78$_{\pm0.23}$ & 23.68$_{\pm0.30}$ & \underline{21.01$_{\pm0.23}$} \\
++ Residual Calibrator (warm-up, no TTA) & 20.55$_{\pm0.10}$ & 21.91$_{\pm0.13}$ & 24.66$_{\pm0.20}$ & 22.13$_{\pm0.14}$ \\
++ Delayed-label TTA (Ours) & 18.23$_{\pm0.12}$ & 19.72$_{\pm0.11}$ & 22.75$_{\pm0.19}$ & \textbf{19.97$_{\pm0.13}$} \\
+\midrule
+\multicolumn{5}{c}{\textbf{PEMS05}} \\
+\midrule
+Backbone (frozen) & 10.39$_{\pm0.06}$ & 11.00$_{\pm0.06}$ & 12.25$_{\pm0.10}$ & \underline{11.10$_{\pm0.06}$} \\
++ Residual Calibrator (warm-up, no TTA) & 10.52$_{\pm0.02}$ & 11.13$_{\pm0.04}$ & 12.35$_{\pm0.07}$ & 11.22$_{\pm0.04}$ \\
++ Delayed-label TTA (Ours) & 10.02$_{\pm0.03}$ & 10.66$_{\pm0.04}$ & 11.93$_{\pm0.08}$ & \textbf{10.75$_{\pm0.05}$} \\
+\midrule
+\multicolumn{5}{c}{\textbf{PEMS07}} \\
+\midrule
+Backbone (frozen) & 16.23$_{\pm0.25}$ & 17.53$_{\pm0.28}$ & 19.94$_{\pm0.32}$ & \underline{17.67$_{\pm0.28}$} \\
++ Residual Calibrator (warm-up, no TTA) & 16.44$_{\pm0.21}$ & 17.72$_{\pm0.23}$ & 20.06$_{\pm0.26}$ & 17.85$_{\pm0.23}$ \\
++ Delayed-label TTA (Ours) & 14.77$_{\pm0.14}$ & 16.21$_{\pm0.16}$ & 18.86$_{\pm0.18}$ & \textbf{16.36$_{\pm0.16}$} \\
+\midrule
+\multicolumn{5}{c}{\textbf{PEMS08}} \\
+\midrule
+Backbone (frozen) & 12.76$_{\pm0.09}$ & 13.80$_{\pm0.09}$ & 15.75$_{\pm0.10}$ & \underline{13.92$_{\pm0.09}$} \\
++ Residual Calibrator (warm-up, no TTA) & 12.94$_{\pm0.06}$ & 13.96$_{\pm0.06}$ & 15.86$_{\pm0.08}$ & 14.08$_{\pm0.07}$ \\
++ Delayed-label TTA (Ours) & 12.27$_{\pm0.05}$ & 13.36$_{\pm0.06}$ & 15.36$_{\pm0.08}$ & \textbf{13.48$_{\pm0.06}$} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}

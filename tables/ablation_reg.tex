@@ -1,0 +1,32 @@
+\begin{table}[!h]
+\centering
+\caption{Ablation on the test-time adaptation regularisers: consistency loss $\lambda_c$ and proximal anchor $\lambda_r$.}
+\label{tab:abl_reg}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.1}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Variant} & \textbf{MAE@3} & \textbf{MAE@6} & \textbf{MAE@12} & \textbf{Avg} \\
+\midrule
+\multicolumn{5}{c}{\textbf{PEMS05}} \\
+\midrule
+no reg & 10.08$_{\pm0.03}$ & 10.72$_{\pm0.04}$ & 12.00$_{\pm0.07}$ & \underline{10.82$_{\pm0.04}$} \\
+prox only ($\lambda\_r$) & 10.09$_{\pm0.03}$ & 10.73$_{\pm0.04}$ & 12.01$_{\pm0.08}$ & 10.82$_{\pm0.04}$ \\
+cons only ($\lambda\_c$=.05) & 10.10$_{\pm0.04}$ & 10.73$_{\pm0.05}$ & 12.01$_{\pm0.08}$ & 10.83$_{\pm0.05}$ \\
+both (default) & 10.08$_{\pm0.04}$ & 10.72$_{\pm0.05}$ & 12.00$_{\pm0.09}$ & \textbf{10.81$_{\pm0.05}$} \\
+cons only ($\lambda\_c$=.10) & 10.09$_{\pm0.04}$ & 10.73$_{\pm0.05}$ & 12.00$_{\pm0.08}$ & 10.82$_{\pm0.05}$ \\
+$\lambda\_c$=.10 + prox & 10.09$_{\pm0.03}$ & 10.73$_{\pm0.04}$ & 12.01$_{\pm0.08}$ & 10.83$_{\pm0.04}$ \\
+\midrule
+\multicolumn{5}{c}{\textbf{PEMS08}} \\
+\midrule
+no reg & 12.35$_{\pm0.05}$ & 13.43$_{\pm0.06}$ & 15.45$_{\pm0.08}$ & 13.55$_{\pm0.06}$ \\
+prox only ($\lambda\_r$) & 12.34$_{\pm0.05}$ & 13.42$_{\pm0.06}$ & 15.45$_{\pm0.08}$ & \textbf{13.55$_{\pm0.06}$} \\
+cons only ($\lambda\_c$=.05) & 12.35$_{\pm0.05}$ & 13.43$_{\pm0.06}$ & 15.44$_{\pm0.08}$ & \underline{13.55$_{\pm0.06}$} \\
+both (default) & 12.36$_{\pm0.07}$ & 13.44$_{\pm0.08}$ & 15.45$_{\pm0.09}$ & 13.56$_{\pm0.08}$ \\
+cons only ($\lambda\_c$=.10) & 12.36$_{\pm0.05}$ & 13.44$_{\pm0.06}$ & 15.45$_{\pm0.08}$ & 13.57$_{\pm0.06}$ \\
+$\lambda\_c$=.10 + prox & 12.36$_{\pm0.05}$ & 13.44$_{\pm0.06}$ & 15.45$_{\pm0.08}$ & 13.56$_{\pm0.06}$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}

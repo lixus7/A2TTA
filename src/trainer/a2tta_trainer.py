@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import csv
+import copy
 import math
 from collections import deque
 from datetime import datetime
@@ -39,6 +40,8 @@ from torch_geometric.utils import to_dense_batch
 from dataer.SpatioTemporalDataset import SpatioTemporalDataset
 from utils.metric import cal_metric, masked_mae_np
 from src.model.a2tta import ResidualCalibrator, ActiveSelector
+# Minimal helpers for the local-context clone (tta_ctx_local, Ours selection).
+from src.trainer.ctx_local import stack_pool, context_row_weights
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +58,45 @@ def _build_node_idx(B: int, N: int, device) -> torch.Tensor:
     """[B*N] tensor of node ids 0..N-1 repeated for each batch element."""
     base = torch.arange(N, device=device)
     return base.unsqueeze(0).expand(B, N).reshape(-1)
+
+
+class _XOnly:
+    """Minimal stand-in for a PyG batch when a model's forward only reads .x."""
+    __slots__ = ("x",)
+    def __init__(self, x):
+        self.x = x
+
+
+def _backbone_infer(backbone, data, adj, N, chunk: int = 16):
+    """Inference-only backbone call. For STAEFORMER the spatial-attention
+    activations scale with batch×N and OOM small GPUs (L40S died at year 2011
+    on PEMS03 with eval bs=64) — so chunk the batch internally; the logical
+    batch (and thus TTA cadence) is unchanged. Legacy backbones pass through
+    untouched. Call under torch.no_grad()."""
+    if not hasattr(getattr(backbone, "backbone", None), "adaptive_embedding"):
+        return backbone(data, adj)
+    x = data.x
+    B = x.shape[0] // N
+    if B <= chunk:
+        return backbone(data, adj)
+    outs = []
+    for i in range(0, B, chunk):
+        outs.append(backbone(_XOnly(x[i * N:(i + chunk) * N]), adj))
+    return torch.cat(outs, dim=0)
+
+
+def _staeformer_forward_flat(model, x3: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
+    """Grad-enabled STAEFORMER_Model forward from a dense [B, N, T_in] tensor.
+
+    Mirrors STAEFORMER_Model.forward but skips the PyG Data wrapper (and its
+    eval-mode no-op dropout). Used by the a2tta_emb mode, which needs a FRESH
+    backbone forward so gradients reach the adaptive embedding — the pool's
+    cached y_base tensors are detached and cannot carry gradients.
+    """
+    T = x3.shape[-1]
+    feat = model.backbone(x3, adj).reshape(-1, T)
+    h = feat + x3.reshape(-1, T)
+    return model.fc(model.activation(h))
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +119,7 @@ def warmup_calibrator(
 
     opt = optim.AdamW(filter(lambda p: p.requires_grad, calibrator.parameters()), lr=lr)
     N = args.adj.shape[0]
+    infer_chunk = int(getattr(args, "a2tta", {}).get("infer_chunk", 16))
 
     best_val = float("inf")
     for ep in range(epochs):
@@ -85,7 +128,7 @@ def warmup_calibrator(
         for data in train_loader:
             data = data.to(args.device, non_blocking=True)
             with torch.no_grad():
-                y_base = backbone(data, args.adj)  # [B*N, T]
+                y_base = _backbone_infer(backbone, data, args.adj, N, infer_chunk)  # [B*N, T]
             B = y_base.shape[0] // N
             x_in = data.x.reshape(-1, N, args.gcn["in_channel"]).reshape(-1, args.gcn["in_channel"])
             node_idx = _build_node_idx(B, N, args.device)
@@ -104,7 +147,7 @@ def warmup_calibrator(
         with torch.no_grad():
             for data in val_loader:
                 data = data.to(args.device, non_blocking=True)
-                y_base = backbone(data, args.adj)
+                y_base = _backbone_infer(backbone, data, args.adj, N, infer_chunk)
                 B = y_base.shape[0] // N
                 x_in = data.x.reshape(-1, N, args.gcn["in_channel"]).reshape(-1, args.gcn["in_channel"])
                 node_idx = _build_node_idx(B, N, args.device)
@@ -194,10 +237,14 @@ def online_a2tta_eval(
     lambda_reg: float = cfg["lambda_reg"]
     fast_dev_run: bool = cfg.get("fast_dev_run", False)
     bs: int = int(cfg.get("eval_batch_size", 64))
+    infer_chunk: int = int(cfg.get("infer_chunk", 16))
     mc_K: int = int(cfg.get("mc_K", 4))
 
     # Adaptation enabled?
-    do_adapt = method_mode in ("tta_random", "tta_recent", "tta_error", "a2tta_lite", "tta_all")
+    do_adapt = method_mode in (
+        "tta_random", "tta_recent", "tta_error", "a2tta_lite", "tta_all",
+        "a2tta_emb", "tta_ctx_local",
+    )
     use_calibrator = method_mode != "backbone"
 
     if method_mode == "tta_random":
@@ -206,16 +253,25 @@ def online_a2tta_eval(
         selector = ActiveSelector(mode="recent")
     elif method_mode == "tta_error":
         selector = ActiveSelector(mode="error_only")
-    elif method_mode == "tta_all":
+    elif method_mode in ("tta_all", "tta_ctx_local"):
+        # Full-pool adaptation; bypasses the active scoring pass. tta_ctx_local
+        # updates the global calibrator exactly like tta_all, then specialises a
+        # discardable local clone at prediction time (see the predict block).
         selector = ActiveSelector(mode="all")
     else:
         selector = ActiveSelector(
-            w_err=cfg.get("w_err", 1.0),
-            w_unc=cfg.get("w_unc", 0.3),
-            w_shift=cfg.get("w_shift", 0.3),
-            w_recency=cfg.get("w_recency", 0.1),
+            w_err=cfg.get("w_err", 1.0), w_unc=cfg.get("w_unc", 0.3),
+            w_shift=cfg.get("w_shift", 0.3), w_recency=cfg.get("w_recency", 0.1),
             mode="active",
         )
+
+    # tta_ctx_local (Ours selection): keep the stable global all-label calibrator,
+    # then at each batch clone it and take a few steps on context-weighted delayed
+    # labels before predicting (the clone is discarded). The exploration of other
+    # selection / weighting ideas that did NOT beat tta_all is archived in
+    # a2tta_back.py — see appendix on sample selection.
+    ctx_local = method_mode == "tta_ctx_local"
+    local_steps = int(cfg.get("local_steps", 3))
 
     # Snapshot the calibrator init for proximal regularizer.
     init_state = {k: v.detach().clone() for k, v in calibrator.state_dict().items()}
@@ -224,6 +280,30 @@ def online_a2tta_eval(
     opt = None
     if do_adapt:
         opt = optim.AdamW(calibrator.parameters(), lr=adapt_lr)
+
+    # a2tta_emb: additionally adapt the backbone's spatio-temporal adaptive
+    # embedding (STAEFormer's per-(timestep,node) table) — but ONLY rows of
+    # actively-selected nodes, chosen by per-node delayed-label error. The
+    # rest of the backbone stays frozen. All other method modes leave the
+    # backbone untouched (emb_param stays None), so legacy paths are intact.
+    emb_param = None
+    emb_init = None
+    emb_opt = None
+    if method_mode == "a2tta_emb":
+        emb_param = getattr(getattr(backbone, "backbone", None), "adaptive_embedding", None)
+        if emb_param is None:
+            raise ValueError(
+                "a2tta_emb requires a STAEFORMER backbone "
+                "(backbone.backbone.adaptive_embedding not found) — pass "
+                "--backbone_method STAEFORMER with matching checkpoints."
+            )
+        emb_param.requires_grad_(True)
+        emb_init = emb_param.detach().clone()
+        # weight_decay=0: rows whose grad we zero must not drift via decay.
+        emb_opt = optim.AdamW([emb_param], lr=float(cfg.get("emb_lr", adapt_lr)), weight_decay=0.0)
+    node_budget_frac = float(cfg.get("node_budget_frac", 0.25))
+    emb_batch_cap = int(cfg.get("emb_batch_cap", 16))
+    lambda_reg_emb = float(cfg.get("lambda_reg_emb", lambda_reg))
 
     # Source-stats reference for shift_score (use train split mean/std of last+slope features).
     train_x = inputs["train_x"]  # [T, x_len, N] (z-score already)
@@ -348,14 +428,75 @@ def online_a2tta_eval(
                 opt.step()
                 n_adapt_steps_total += 1
 
+                # ---- a2tta_emb: update actively-selected adaptive-emb rows ----
+                if emb_param is not None:
+                    # Active NODE selection: rank nodes by mean delayed-label
+                    # error over the selected samples (extends the sample-level
+                    # active principle to the node axis).
+                    with torch.no_grad():
+                        err_node = torch.stack([
+                            (s.y_pred - s.y_flat).abs().mean(dim=-1) for s in sel_list
+                        ]).mean(dim=0)                                   # [N]
+                        k = max(1, int(node_budget_frac * err_node.shape[0]))
+                        node_mask = torch.zeros_like(err_node, dtype=torch.bool)
+                        node_mask[torch.topk(err_node, k=k).indices] = True
+                    # Fresh backbone forward on a capped sub-batch (gradients
+                    # cannot flow through the pool's cached y_base).
+                    sub = sel_list[:emb_batch_cap]
+                    Bs = len(sub)
+                    xs_e = torch.cat([s.x_flat for s in sub], dim=0)
+                    ys_e = torch.cat([s.y_flat for s in sub], dim=0)
+                    ns_e = torch.cat([s.node_idx for s in sub], dim=0)
+                    y_base_fresh = _staeformer_forward_flat(
+                        backbone, xs_e.reshape(Bs, N, -1), args.adj)
+                    y_hat_e = calibrator(y_base_fresh, xs_e, ns_e)
+                    loss_e = (F.l1_loss(y_hat_e, ys_e, reduction="mean")
+                              + lambda_reg_emb * ((emb_param - emb_init) ** 2).sum())
+                    if torch.isfinite(loss_e):
+                        emb_opt.zero_grad(set_to_none=True)
+                        # Calibrator grads from this backward are discarded by
+                        # its own zero_grad at the next calibrator step.
+                        loss_e.backward()
+                        if emb_param.grad is not None:
+                            emb_param.grad[:, ~node_mask, :] = 0
+                        emb_opt.step()
+
         # ---------- Predict current batch (post-adapt calibrator) ----------
         calibrator.eval()
         with torch.no_grad():
-            y_base = backbone(batch, args.adj)             # [B*N, T]
-            if use_calibrator:
-                y_pred_flat = calibrator(y_base, x_flat, node_idx)
-            else:
-                y_pred_flat = y_base
+            y_base = _backbone_infer(backbone, batch, args.adj, N, infer_chunk)             # [B*N, T]
+
+        if ctx_local and len(pool) >= max(8, int(0.1 * cand_pool_size)):
+            # Ours (selection): clone the stable global calibrator, specialise the
+            # clone on context-weighted delayed labels for a few steps, predict
+            # with it, then discard it — the global calibrator is never biased.
+            local = copy.deepcopy(calibrator); local.train()
+            lopt = optim.AdamW(local.parameters(), lr=adapt_lr)
+            pool_d = stack_pool(list(pool), device)
+            ctx_l = {"x_curr": x_flat.reshape(B, N, -1), "yb_curr": y_base.reshape(B, N, -1),
+                     "target_idx": next_idx}
+            xs_l = pool_d["x"].reshape(-1, pool_d["x"].shape[-1])
+            ys_l = pool_d["y"].reshape(-1, pool_d["y"].shape[-1])
+            ybs_l = pool_d["yb"].reshape(-1, pool_d["yb"].shape[-1])
+            ns_l = torch.arange(N, device=device).repeat(pool_d["P"])
+            for _ in range(local_steps):
+                rw = context_row_weights("hybrid", pool_d, ctx_l, local)
+                yh = local(ybs_l, xs_l, ns_l)
+                pr = (yh - ys_l).abs().mean(dim=-1)
+                loss = (pr * rw).mean() if rw is not None else pr.mean()
+                if not torch.isfinite(loss):
+                    break
+                lopt.zero_grad(set_to_none=True); loss.backward(); lopt.step()
+            local.eval()
+            with torch.no_grad():
+                y_pred_flat = local(y_base, x_flat, node_idx)
+            del local, lopt
+        else:
+            with torch.no_grad():
+                if use_calibrator:
+                    y_pred_flat = calibrator(y_base, x_flat, node_idx)
+                else:
+                    y_pred_flat = y_base
 
         pred_dense, y_dense = _to_dense(y_pred_flat, y_flat, batch.batch)
         pred_chrono.append(pred_dense.detach().cpu().numpy())

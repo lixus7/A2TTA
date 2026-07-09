@@ -10,7 +10,7 @@ Entry point that orchestrates per-year evaluation:
   * logs metrics via the same `cal_metric` used by main.py and writes a CSV
 
 Usage:
-  python a2tta_main.py --conf conf/PEMS05/a2tta_lite_pems05.json \
+  python a2tta_main.py --conf conf/PEMS05/a2tta_olan_pems05.json \
       --method a2tta_lite --seed 42 --gpuid 1 --backbone_ckpt_logname oneline_st_an_pems05
 
 See `scripts/a2tta_lite_pems05_run.sh` for the full experiment matrix.
@@ -35,7 +35,7 @@ from utils.common_tools import mkdirs
 from src.model.model import (
     TrafficStream_Model, STKEC_Model, EAC_Model, Universal_Model,
     STGNN_Model, DCRNN_Model, ASTGNN_Model, TGCN_Model,
-    PECPM_Model, RAP_Model, STTTC_Model,
+    PECPM_Model, RAP_Model, STTTC_Model, STAEFORMER_Model,
 )
 from src.model.a2tta import ResidualCalibrator
 from src.trainer.a2tta_trainer import (
@@ -57,6 +57,7 @@ METHOD_REGISTRY = {
     'PECPM': PECPM_Model,
     'RAP': RAP_Model,
     'STTTC': STTTC_Model,
+    'STAEFORMER': STAEFORMER_Model,
 }
 
 
@@ -72,6 +73,12 @@ def _load_backbone_for_year(args, year: int):
     backbone_method = getattr(args, "backbone_method", "TrafficStream")
     logname_primary = args.backbone_ckpt_logname
     logname_fallback = getattr(args, "backbone_ckpt_logname_fallback", "retrain_st_pems05")
+    # Backbone ckpts may live under a different seed than the TTA seed (e.g.
+    # STAEFormer retrain used seeds 42-46 while A2TTA runs 51-55). Default -1
+    # keeps the legacy behaviour (same seed as the TTA run).
+    backbone_seed = int(getattr(args, "backbone_seed", -1))
+    if backbone_seed < 0:
+        backbone_seed = args.seed
 
     # Set args.method for the backbone factory; restore after.
     saved_method = getattr(args, "method", None)
@@ -80,7 +87,7 @@ def _load_backbone_for_year(args, year: int):
     vars(args)["year"] = year
 
     def _try(logname):
-        ckpt_dir = osp.join(args.model_path, f"{logname}-{args.seed}", str(year))
+        ckpt_dir = osp.join(args.model_path, f"{logname}-{backbone_seed}", str(year))
         if not osp.isdir(ckpt_dir):
             return None
         files = [f for f in os.listdir(ckpt_dir) if f.endswith(".pkl")]
@@ -94,13 +101,22 @@ def _load_backbone_for_year(args, year: int):
     if ckpt is None:
         raise FileNotFoundError(
             f"No backbone .pkl for year={year} under "
-            f"{logname_primary}-{args.seed}/ or {logname_fallback}-{args.seed}/"
+            f"{logname_primary}-{backbone_seed}/ or {logname_fallback}-{backbone_seed}/"
         )
 
     args.logger.info(f"  [backbone] year={year} loading {ckpt}")
     state = torch.load(ckpt, map_location=args.device)["model_state_dict"]
     model = METHOD_REGISTRY[backbone_method](args).to(args.device)
-    model.load_state_dict(state, strict=False)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    n_matched = len(state) - len(unexpected)
+    if n_matched == 0:
+        # strict=False would otherwise leave a randomly-initialized model and
+        # produce silent garbage (e.g. a TrafficStream ckpt fed to STAEFORMER).
+        raise RuntimeError(
+            f"Backbone ckpt {ckpt} shares NO keys with {backbone_method} "
+            f"(missing={len(missing)}, unexpected={len(unexpected)}) — wrong "
+            f"--backbone_ckpt_logname / --backbone_method pairing?"
+        )
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
@@ -189,7 +205,21 @@ def main(args):
         node_emb_dim=cfg.get("node_emb_dim", 16),
         hidden_dim=cfg.get("hidden_dim", 64),
         dropout=cfg.get("calibrator_dropout", 0.1),
+        horizon_emb_dim=cfg.get("horizon_emb_dim", 0),
+        arch=cfg.get("calibrator_arch", "film"),
+        rank=cfg.get("adapter_rank", 8),
+        gate_type=cfg.get("gate_type", "channel"),
+        temporal_kernel=cfg.get("temporal_kernel", 3),
     ).to(args.device)
+
+    # Trainable-parameter report (ablation fairness): total, arch-head (excl.
+    # node embedding), and the full list of trainable parameter names.
+    _tot, _head, _named = calibrator.param_report()
+    args.logger.info(
+        f"[calibrator] arch={cfg.get('calibrator_arch','film')} "
+        f"rank={cfg.get('adapter_rank',8)} trainable_total={_tot} "
+        f"head_params(excl node_emb)={_head}")
+    args.logger.info(f"[calibrator] trainable params: {_named}")
 
     # Track graph sizes per year (mirrors main.py's args.graph_size_list).
     vars(args)["graph_size_list"] = []
@@ -226,18 +256,22 @@ def main(args):
 
 def _build_parser():
     p = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
-    p.add_argument("--conf", type=str, default="conf/PEMS05/a2tta_lite_pems05.json")
+    p.add_argument("--conf", type=str, default="conf/PEMS05/a2tta_olan_pems05.json")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--gpuid", type=int, default=1)
     p.add_argument("--logname", type=str, default="a2tta_lite_pems05")
-    p.add_argument("--method", type=str, default="a2tta_lite",
+    p.add_argument("--method", type=str, default="tta_ctx_local",
                    choices=["backbone", "calibrator",
                             "tta_random", "tta_recent", "tta_error",
-                            "a2tta_lite", "tta_all"],
-                   help=("Which variant to run. backbone=frozen no-cal baseline; "
-                         "calibrator=warmed-up cal, no online TTA; tta_*=online TTA "
-                         "with random / recent / error-only / full-active selection; "
-                         "tta_all=delayed-label upper bound (uses full pool, no select)."))
+                            "tta_all", "tta_ctx_local",
+                            "a2tta_lite", "a2tta_emb"],
+                   help=("Which variant to run. OURS DEFAULT = tta_ctx_local. "
+                         "backbone=frozen no-cal baseline; calibrator=warmed-up cal, no "
+                         "online TTA; tta_random/recent/error=online-TTA selection "
+                         "baselines; tta_all=adapt on all delayed labels (no selection); "
+                         "tta_ctx_local=Ours, global tta_all calibrator + discardable "
+                         "per-batch local context clone; a2tta_lite/a2tta_emb=legacy. "
+                         "(Other explored selection ideas are archived in a2tta_back.py.)"))
     p.add_argument("--dataset", type=str, default="PEMS05")
     p.add_argument("--checkpoint", type=str, default=None,
                    help="Optional explicit per-year checkpoint root, ignored when "
@@ -247,16 +281,54 @@ def _build_parser():
     p.add_argument("--backbone_ckpt_logname_fallback", type=str, default="retrain_st_pems05")
     p.add_argument("--backbone_method", type=str, default="TrafficStream",
                    choices=list(METHOD_REGISTRY.keys()))
+    p.add_argument("--backbone_seed", type=int, default=-1,
+                   help="Seed suffix of the backbone ckpt dir (e.g. 42 for "
+                        "retrain_staeformer_*-42 while the TTA run uses 51). "
+                        "-1 = use --seed (legacy behaviour).")
     p.add_argument("--freeze_backbone", type=int, default=1)
 
     # Calibrator hyperparams
     p.add_argument("--adapter_hidden_dim", type=int, default=64)
     p.add_argument("--node_emb_dim", type=int, default=16)
     p.add_argument("--calibrator_dropout", type=float, default=0.1)
+    p.add_argument("--calibrator_arch", type=str, default="film",
+                   choices=["residual", "norm", "film", "affine", "adapter",
+                            "lowrank", "gated_adapter", "temporal_conv"],
+                   help=("Calibrator architecture (structural ablation). OURS = film. "
+                         "residual=raw-input MLP residual (legacy); norm=EMA-standardised "
+                         "MLP residual; film=conditional per-sample affine gamma*y+beta "
+                         "(gamma/beta from an MLP, init identity); affine=STATIC "
+                         "channel-wise (1+gamma)*y+beta (no conditioning net); "
+                         "adapter=bottleneck residual y+Wup(GELU(Wdown)); lowrank=linear "
+                         "low-rank residual y+U(V); gated_adapter=adapter with tanh gate; "
+                         "temporal_conv=depthwise 1-D conv over the prediction horizon. "
+                         "All are identity at init."))
+    p.add_argument("--adapter_rank", type=int, default=8,
+                   help="Bottleneck/low-rank dim for adapter/lowrank/gated_adapter.")
+    p.add_argument("--gate_type", type=str, default="channel", choices=["scalar", "channel"],
+                   help="gated_adapter gate granularity (default channel-wise over horizon).")
+    p.add_argument("--temporal_kernel", type=int, default=3,
+                   help="Kernel size for temporal_conv (depthwise over horizon).")
+    # Ours selection (tta_ctx_local): per-batch local context clone.
+    p.add_argument("--local_steps", type=int, default=3,
+                   help="tta_ctx_local: gradient steps for the per-batch local clone.")
+    p.add_argument("--horizon_emb_dim", type=int, default=0,
+                   help="If >0, add a per-horizon embedding to the calibrator "
+                        "(STAEFormer-inspired). 0 = legacy calibrator.")
+
+    # a2tta_emb knobs (only used when --method a2tta_emb)
+    p.add_argument("--emb_lr", type=float, default=-1.0,
+                   help="LR for adaptive-embedding rows; -1 = use --adapt_lr.")
+    p.add_argument("--node_budget_frac", type=float, default=0.25,
+                   help="Fraction of nodes whose embedding rows may update.")
+    p.add_argument("--emb_batch_cap", type=int, default=16,
+                   help="Max pool samples per fresh backbone forward (memory cap).")
+    p.add_argument("--lambda_reg_emb", type=float, default=-1.0,
+                   help="Proximal reg for embedding rows; -1 = use --lambda_reg.")
 
     # Online TTA hyperparams
-    p.add_argument("--adapt_lr", type=float, default=3e-4)
-    p.add_argument("--adapt_steps", type=int, default=1)
+    p.add_argument("--adapt_lr", type=float, default=1e-3)    # Ours tuned default
+    p.add_argument("--adapt_steps", type=int, default=3)      # Ours tuned default
     p.add_argument("--adapt_every_batches", type=int, default=1)
     p.add_argument("--budget_frac", type=float, default=0.25)
     p.add_argument("--candidate_pool_size", type=int, default=512)
@@ -276,6 +348,10 @@ def _build_parser():
 
     # Eval-time loader / CSV / dev knobs
     p.add_argument("--eval_batch_size", type=int, default=64)
+    p.add_argument("--infer_chunk", type=int, default=16,
+                   help="Internal sub-batch for STAEFORMER backbone inference "
+                        "(memory only; logical batch / TTA cadence unchanged). "
+                        "Lower for dense graphs: PEMS07→2, PEMS04/12→8.")
     p.add_argument("--csv_path", type=str, default="run_logs/a2tta_lite_results.csv")
     p.add_argument("--fast_dev_run", type=int, default=0)
     return p
@@ -289,9 +365,19 @@ def _stash_a2tta_cfg(args):
         "hidden_dim": args.adapter_hidden_dim,
         "node_emb_dim": args.node_emb_dim,
         "calibrator_dropout": args.calibrator_dropout,
+        "calibrator_arch": args.calibrator_arch,
+        "adapter_rank": args.adapter_rank,
+        "gate_type": args.gate_type,
+        "temporal_kernel": args.temporal_kernel,
+        "local_steps": args.local_steps,
         "adapt_lr": args.adapt_lr,
         "adapt_steps": args.adapt_steps,
         "adapt_every_batches": args.adapt_every_batches,
+        "horizon_emb_dim": args.horizon_emb_dim,
+        "emb_lr": args.emb_lr if args.emb_lr > 0 else args.adapt_lr,
+        "node_budget_frac": args.node_budget_frac,
+        "emb_batch_cap": args.emb_batch_cap,
+        "lambda_reg_emb": args.lambda_reg_emb if args.lambda_reg_emb >= 0 else args.lambda_reg,
         "budget_frac": args.budget_frac,
         "candidate_pool_size": args.candidate_pool_size,
         "lambda_cons": args.lambda_cons,
@@ -304,6 +390,7 @@ def _stash_a2tta_cfg(args):
         "warmup_epochs": args.warmup_epochs,
         "warmup_lr": args.warmup_lr,
         "eval_batch_size": args.eval_batch_size,
+        "infer_chunk": args.infer_chunk,
         "csv_path": args.csv_path,
         "fast_dev_run": bool(args.fast_dev_run),
     }

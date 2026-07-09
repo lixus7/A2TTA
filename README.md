@@ -9,14 +9,17 @@
 
 </div>
 
-> **TL;DR.** Existing evolving-graph continual forecasters degrade sharply when the sensor
-> network grows by orders of magnitude over its lifetime (e.g. **+9433%** on PEMS05). A2TTA
-> keeps a **frozen backbone** and attaches a tiny **zero-init residual calibrator** that is
-> adapted **at test time** using **delayed ground-truth labels** and **active sample
-> selection** — recovering accuracy at a fraction of the cost of retraining.
+> **TL;DR.** Evolving-graph continual forecasters degrade sharply when the sensor network
+> grows by orders of magnitude over its lifetime (e.g. **+9433%** on PEMS05). A2TTA keeps
+> **any frozen backbone** and attaches a tiny **per-node FiLM calibrator** adapted **at test
+> time** from **delayed ground-truth labels**; at each step it additionally spins up a
+> **discardable local clone** specialised on context-weighted recent labels. It recovers
+> accuracy at a fraction of the cost of retraining and is **backbone-agnostic** — validated on
+> both the **Online-AN** and **STAEformer** backbones.
 
 <p align="center">
-  <img src="./asset/ourmodel.png" alt="A2TTA overview" width="820px" />
+  <!-- 🚧 TODO: methodology figure coming soon (see notebook/ours_method_spec.md for the spec). -->
+  <em>🚧 Methodology figure coming soon — spec in <a href="./notebook/ours_method_spec.md"><code>notebook/ours_method_spec.md</code></a>.</em>
 </p>
 
 ---
@@ -25,43 +28,56 @@
 
 A2TTA decouples *what the model knows* (a frozen backbone) from *how it adapts on the fly*
 (a lightweight calibrator), so adaptation cost stays constant even as the graph explodes.
+**The wrapper is backbone-agnostic** — it consumes only the backbone's prediction, the input
+window, and node ids, so any pretrained forecaster plugs in unchanged (we report both
+**Online-AN / TrafficStream** and **STAEformer** backbones).
 
-1. **Frozen backbone.** A per-year STGNN checkpoint (by default the **Online-AN** backbone)
-   is loaded and frozen — no backbone gradients are ever computed at test time.
+1. **Frozen backbone.** A per-year checkpoint (`--backbone_method`, default **Online-AN**;
+   **STAEformer** also supported) is loaded and frozen — no backbone gradients at test time.
+   It emits a raw-scale `H`-step forecast `y_base`.
 
-2. **Residual calibrator** ([`src/model/a2tta.py`](src/model/a2tta.py)). A small per-node
-   MLP that consumes the backbone prediction `y_base`, the input window `x_in`, four
-   temporal statistics (last / mean / std / OLS-slope), and a learnable per-node embedding,
-   and emits a **zero-initialized residual** `Δ`:
-   `y = y_base + softplus(scale) · Δ`.
-   Because the output projection is zero-init, the calibrator starts as an identity — it can
-   only *help* a well-trained backbone, never hurt it before adaptation. The node embedding
-   **grows automatically** as new sensors appear year over year.
+2. **FiLM calibrator** ([`src/model/a2tta.py`](src/model/a2tta.py), `--calibrator_arch film`).
+   A small per-node MLP consuming `y_base`, the input window `x_in`, four temporal statistics
+   (last / mean / std / OLS-slope) and a learnable per-node embedding, emitting a per-horizon
+   affine `ŷ = γ ⊙ y_base + β` with `γ = 1 + 0.5·tanh(·)` (init 1) and `β = std·β_norm`
+   (init 0). The head is **zero-init**, so the calibrator is the **identity at start** — it
+   can only help, never hurt, before adaptation. The node table **grows automatically** as
+   new sensors appear. (Legacy archs `residual / affine / adapter / …` remain selectable.)
 
 3. **Delayed-label online adaptation** ([`src/trainer/a2tta_trainer.py`](src/trainer/a2tta_trainer.py)).
-   Test windows are processed in **true chronological order**. A window's ground truth is
-   only revealed after its forecast horizon `H` has physically elapsed — enforced by a
-   `pending → candidate_pool` queue, so **no label leakage** is possible. Every few batches we:
-   - **score** the candidate pool with an `ActiveSelector` — a weighted blend of recent
-     error, MC-dropout uncertainty, distribution-shift, and recency;
-   - **select** the top `budget_frac` of candidates;
-   - take a few gradient steps on the **calibrator only** (supervised L1 + a weak consistency
-     loss + a proximal anchor to the init).
+   Test windows are processed in **true chronological order**; a window's ground truth is only
+   revealed after its horizon `H` has physically elapsed — enforced by a
+   `pending → candidate_pool` queue, so **no label leakage** is possible. Each batch, the
+   **persistent** calibrator takes a few steps on the delayed-label pool (supervised L1 +
+   optional consistency + proximal-to-init).
 
-4. **Identical metrics.** Predictions are scored with the same `cal_metric` used by every
-   baseline, so A2TTA numbers are directly comparable to Online-AN / EAC / etc.
+4. **Discardable local clone** ([`src/trainer/ctx_local.py`](src/trainer/ctx_local.py),
+   `--method tta_ctx_local` — *our method*). Before predicting each batch, the stable global
+   calibrator is **cloned**; the clone takes a few steps on pool samples **re-weighted by
+   relevance to the current window** (time-of-day / day-of-week phase · input+base-prediction
+   cosine similarity · recency, softmax-normalised with an ESS guard), predicts the batch, and
+   is then **discarded** — so the global calibrator is never biased by any single context. On
+   free delayed-label TTA this is the *only* mechanism we found that consistently beats
+   adapting on all labels (all other sample-selection schemes are ablated below).
 
-### Ablation variants (the `--method` flag)
+5. **Identical metrics.** Predictions are scored with the same `cal_metric` used by every
+   baseline, so A2TTA numbers are directly comparable.
 
-| `--method`   | Description |
-|--------------|-------------|
-| `backbone`   | frozen backbone, no calibrator (lower bound) |
-| `calibrator` | warmed-up calibrator, **no** online TTA |
-| `tta_random` | online TTA, random sample selection |
-| `tta_recent` | online TTA, most-recent selection |
-| `tta_error`  | online TTA, error-only selection |
-| `a2tta_lite` | **full active selection** (err + unc + shift + recency) — *our method* |
-| `tta_all`    | online TTA over the full pool, no selection (compute upper bound) |
+### Ablation-D (`--method` × `--calibrator_arch`)
+
+Each row of Ablation-D is one `a2tta_main.py` config (numbers in
+[`tables/ablation.md`](tables/ablation.md)):
+
+| `--method` | `--calibrator_arch` | Description |
+|---|---|---|
+| `backbone` | — | frozen backbone, no calibration (lower bound) |
+| `calibrator` | `film` | warmed-up FiLM calibrator, **no** online TTA |
+| `tta_all` | `film` | online TTA on the full delayed-label pool, no local clone |
+| `tta_ctx_local` | `film` | **full A2TTA (Ours)** — global TTA + discardable local clone |
+| `tta_ctx_local` | `affine` | Ours with a static affine calibrator instead of FiLM |
+
+The selection-study modes (`tta_random / tta_recent / tta_error`, and active `a2tta_lite`)
+also remain available on the `--method` flag.
 
 ---
 
@@ -73,12 +89,15 @@ a2tta/
 ├── a2tta_main.py           # entry for A2TTA (+ its ablation variants)
 ├── stkec_main.py           # entry for STKEC
 ├── src/
-│   ├── model/              # model.py (all backbones+baselines), a2tta.py, ewc.py, replay.py, ...
-│   ├── trainer/            # default_trainer.py, a2tta_trainer.py, stkec_trainer.py
+│   ├── model/              # model.py (all backbones+baselines), a2tta.py (FiLM calibrator), ...
+│   ├── trainer/            # a2tta_trainer.py (online loop), ctx_local.py (local clone), ...
 │   └── dataer/             # SpatioTemporalDataset.py
 ├── utils/                  # data_convert, initialize, metric, common_tools
-├── conf/                   # per-dataset JSON configs (PEMS, pems03 … pems12)
-├── scripts/                # one-command runners for A2TTA + every baseline
+├── conf/                   # per-dataset JSON configs (a2tta_olan_*, a2tta_stae_*, baselines)
+├── scripts/                # runners for A2TTA + baselines + analysis helpers
+├── tables/                 # result tables — main / ablation-D / new-sensor (md + tex + PDF)
+├── notebook/               # figure notebooks (HP sensitivity, new-sensor, per-horizon,
+│                           #   dataset maps) + render scripts + method spec
 ├── data/                   # dataset skeleton + processing notebooks (see data/README.md)
 └── environment.yaml
 ```
@@ -118,14 +137,38 @@ Datasets: **XXL expanding-sensor** benchmarks
 > first (it is step 5 of every `scripts/pemsXX_run.sh`; for PEMS05 you can also run
 > `python main.py --conf conf/PEMS05/oneline_st_an_pems05.json --gpuid 0 --seed 51`).
 
-**Single run** (PEMS05, full method, one seed):
+**Single run — full method (Ours), Online-AN backbone** (PEMS05, one seed):
 
 ```bash
 python a2tta_main.py \
-    --conf conf/PEMS05/a2tta_lite_pems05.json \
-    --method a2tta_lite --dataset PEMS05 \
-    --backbone_ckpt_logname oneline_st_an_pems05 \
+    --conf conf/PEMS05/a2tta_olan_pems05.json \
+    --method tta_ctx_local --calibrator_arch film \
+    --dataset PEMS05 --backbone_method TrafficStream --freeze_backbone 1 \
+    --backbone_ckpt_logname oneline_st_an_pems05 --backbone_seed 51 \
     --gpuid 0 --seed 51
+```
+
+**Same, on the STAEformer backbone** (`backbone_seed = seed − 9` for the STAE checkpoints):
+
+```bash
+python a2tta_main.py \
+    --conf conf/PEMS05/a2tta_stae_pems05.json \
+    --method tta_ctx_local --calibrator_arch film \
+    --dataset PEMS05 --backbone_method STAEFORMER --freeze_backbone 1 \
+    --backbone_ckpt_logname retrain_staeformer_pems05 --backbone_seed 42 \
+    --gpuid 0 --seed 51
+```
+
+**Ablation-D** — sweep the five rows by changing only `--method` / `--calibrator_arch`:
+
+```bash
+for cfg in "backbone -" "calibrator film" "tta_all film" \
+           "tta_ctx_local film" "tta_ctx_local affine"; do
+  set -- $cfg
+  python a2tta_main.py --conf conf/PEMS05/a2tta_olan_pems05.json --dataset PEMS05 \
+      --backbone_method TrafficStream --backbone_ckpt_logname oneline_st_an_pems05 \
+      --backbone_seed 51 --method "$1" --calibrator_arch "$2" --gpuid 0 --seed 51
+done
 ```
 
 **Full ablation matrix** on PEMS05 (all 6 variants × 5 seeds):
@@ -149,9 +192,38 @@ Outputs:
 - summarize a CSV into a table with `python scripts/a2tta_summarize.py <csv>`
 
 Key knobs (env-overridable in the script, or CLI flags on `a2tta_main.py`):
-`ADAPT_LR`, `ADAPT_STEPS`, `BUDGET_FRAC`, `POOL_SIZE`, `LAMBDA_CONS`, `LAMBDA_REG`,
-`HIDDEN_DIM`, `NODE_EMB_DIM`, `WARMUP_EPOCHS`, and the active-score weights
-`--w_err / --w_unc / --w_shift / --w_recency`.
+`ADAPT_LR`, `ADAPT_STEPS`, `BUDGET_FRAC`, `POOL_SIZE`, `LOCAL_STEPS`, `WARMUP_EPOCHS`,
+`LAMBDA_CONS`, `LAMBDA_REG`, `HIDDEN_DIM`, `NODE_EMB_DIM`, and the active-score weights
+`--w_err / --w_unc / --w_shift / --w_recency`. Defaults (from the sensitivity study):
+`adapt_lr 1e-3 · adapt_steps 3 · candidate_pool_size 512 · budget_frac 0.25 · warmup 3 ·
+local_steps 3`; only `adapt_lr` is materially sensitive (flat optimum `1e-3–3e-3`).
+
+---
+
+## 📈 Results & figures
+
+Result tables (Markdown + LaTeX + a zoomable **vector PDF** rendering) live in
+[`tables/`](tables/):
+
+| Table | File |
+|---|---|
+| Main results (12 models × 9 datasets, A2TTA on **both** backbones) | [`tables/main_table.md`](tables/main_table.md) · [`.pdf`](tables/main_table.pdf) |
+| **Ablation-D** (component knock-out, both backbones) | [`tables/ablation.md`](tables/ablation.md) · [`.pdf`](tables/ablation.pdf) |
+| New-sensor generalisation (`a2tta-olan` / `a2tta-staef`) | [`tables/tsas_new_sensors.md`](tables/tsas_new_sensors.md) · [`.pdf`](tables/tsas_new_sensors.pdf) |
+
+Figures are reproducible notebooks in [`notebook/`](notebook/) (each embeds its rendered PNG so
+it displays without re-running; regeneration needs the released `run_logs/` summaries at repo
+root — see [`notebook/README.md`](notebook/README.md)):
+
+| Notebook | Figure |
+|---|---|
+| [`hyper-a2tta.ipynb`](notebook/hyper-a2tta.ipynb) | HP-sensitivity (OAT, 6 knobs, both backbones) |
+| [`new_sensor_baselines.ipynb`](notebook/new_sensor_baselines.ipynb) | new-sensor error vs baselines |
+| [`per_horizon_lines.ipynb`](notebook/per_horizon_lines.ipynb) | per-horizon error curves |
+| `render_final.py` (pems-grid) + `fig_churn` | sensor geographic maps & yearly sensor churn |
+
+The method write-up used to design the overview figure is
+[`notebook/ours_method_spec.md`](notebook/ours_method_spec.md).
 
 ---
 
