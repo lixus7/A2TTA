@@ -281,7 +281,8 @@ acknowledge:
 - **STKEC** (TITS'23) — [paper](https://ieeexplore.ieee.org/document/10101714/) · [repo](https://github.com/wangbinwu13116175205/STKEC)
 - **ST-TTC** (NeurIPS'25) — [paper](https://arxiv.org/pdf/2506.00635) · [repo](https://github.com/Onedean/ST-TTC)
 - **STRAP** (NeurIPS'25), [paper](https://arxiv.org/abs/2505.19547/) · [repo](https://github.com/HoweyZ/STRAP)
-- **PECPM** (KDD'23), and the conventional backbones GWN / STID /
+- **PECPM** (KDD'23),
+- and the conventional backbones GWN / STID /
   iTransformer / DLinear / ST-Norm / STAEformer.
 
 ## License
