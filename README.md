@@ -1,5 +1,5 @@
 <div align="center">
-  <h2><b>A2TTA: Active Adaptive Test-Time Adaptation <br> for Continual Traffic Forecasting under Extreme Sensor Growth</b></h2>
+  <h2><b>A2TTA: Anchored-and-Agile Test-Time Adaptation for Evolving Traffic Sensor Networks</b></h2>
 </div>
 
 <div align="center">
