@@ -1,7 +1,7 @@
 #!/bin/bash
 # Local / single-GPU Chronos-2 zero-shot baseline runner (no PBS).
 # For interactive GPU nodes or quick debugging. For the full 4xH200 sweep use
-# scripts/katana_chronos_4gpu.sh instead.
+# an HPC scheduler wrapper instead.
 #
 # Usage:
 #   bash scripts/chronos_run.sh                       # all datasets, GPU 0

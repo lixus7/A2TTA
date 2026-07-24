@@ -24,7 +24,7 @@ Key fidelity points (verified against the precomputed FastData npz):
 Usage (single dataset, all years):
     python chronos_baseline.py --dataset pems03 --gpuid 0
 
-Usage (one (dataset, year) shard — what the katana FIFO dispatcher calls):
+Usage (one (dataset, year) shard — suitable for an HPC array worker):
     python chronos_baseline.py --dataset pems03 --year 2001 --gpuid 0
 
 Outputs (under --out-dir, default run_logs/chronos):
@@ -200,6 +200,18 @@ def load_pipeline(model_id, device, dtype):
         model_id, device_map=device, torch_dtype=dtype)
 
 
+def public_model_label(model_ref):
+    """Return provenance suitable for logs/results without exposing local paths."""
+    override = os.environ.get("CHRONOS_MODEL_LABEL")
+    if override:
+        return override
+    expanded = os.path.expanduser(model_ref)
+    if (os.path.isabs(model_ref) or model_ref.startswith((".", "~"))
+            or os.path.exists(expanded)):
+        return "local-checkpoint"
+    return model_ref
+
+
 def impute_windows(test_x):
     """test_x: (S, X_LEN, N). Fill missing (NaN/inf) entries of each (s, node)
     length-X_LEN context with that context's own mean; all-missing -> 0.0.
@@ -351,13 +363,15 @@ def discover_years(raw_path):
 
 
 def append_csv_row(csv_path, row, header):
-    new = not os.path.exists(csv_path)
-    with open(csv_path, "a", newline="") as f:
+    with open(csv_path, "a+", newline="") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0, os.SEEK_END)
+        new = f.tell() == 0
         w = csv.DictWriter(f, fieldnames=header)
         if new:
             w.writeheader()
         w.writerow(row)
+        f.flush()
         fcntl.flock(f, fcntl.LOCK_UN)
 
 
@@ -431,11 +445,12 @@ def main():
 
     grp_desc = (f"mode={args.mode} grouping={args.grouping} group_size={args.group_size}"
                 if args.mode == "multivariate" else "mode=univariate")
-    print(f"[chronos] dataset={ds_lower} years={years} model={args.model} "
+    model_label = public_model_label(args.model)
+    print(f"[chronos] dataset={ds_lower} years={years} model={model_label} "
           f"device={device} dtype={args.dtype} bs={args.batch_size} {grp_desc}",
           flush=True)
 
-    print(f"[chronos] loading {args.model} ...", flush=True)
+    print(f"[chronos] loading {model_label} ...", flush=True)
     pipeline = load_pipeline(args.model, device, dtype)
     print("[chronos] model loaded.", flush=True)
 
@@ -479,7 +494,7 @@ def main():
                   f"RMSE {m['RMSE']:.4f}\tMAPE {m['MAPE']:.4f}", flush=True)
         print(f"[chronos] {ds_lower} {year} done in {secs:.1f}s", flush=True)
 
-        meta = {"dataset": ds_lower, "year": year, "model": args.model,
+        meta = {"dataset": ds_lower, "year": year, "model": model_label,
                 "mode": args.mode,
                 "grouping": args.grouping if args.mode == "multivariate" else "",
                 "group_size": args.group_size if args.mode == "multivariate" else 0,

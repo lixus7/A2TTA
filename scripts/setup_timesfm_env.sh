@@ -15,7 +15,7 @@
 #   4. Picks the HuggingFace checkpoint (default: TimesFM 2.5, repo
 #      google/timesfm-2.5-200m-pytorch; override via FORCE_REPO).
 #   5. Pre-downloads that checkpoint into a PERSISTENT cache on a persistent scratch disk so
-#      katana compute nodes (often offline) can load it with HF_HUB_OFFLINE=1.
+#      offline compute nodes can load it with HF_HUB_OFFLINE=1.
 #   6. Regenerates conf/PEMS*/timesfm_*.json so repo_id matches the resolved repo.
 # =============================================================================
 set -euo pipefail
@@ -24,7 +24,7 @@ set -euo pipefail
 ENV_NAME=${ENV_NAME:-timesfm}
 PY_VER=${PY_VER:-3.11}          # timesfm[torch] extra is gated to python 3.11
 REPO_ROOT=${REPO_ROOT:-.}
-# Persistent HF cache shared by setup (online) and the katana job (offline).
+# Persistent HF cache shared by setup (online) and the HPC job (offline).
 export HF_HOME=${HF_HOME:-./hf_cache}
 CONDA_SH=${CONDA_SH:-$CONDA
 # IMPORTANT: PyPI `timesfm` (<=1.3.0) only ships the CLASSIC API (TimesFm /
@@ -125,7 +125,7 @@ TIMESFM_REPO="$RESOLVED_REPO" python scripts/gen_timesfm_configs.py
 echo
 echo "[setup] DONE."
 echo "  conda env      : $ENV_NAME"
-echo "  HF cache       : $HF_HOME   (set HF_HOME to this on katana, with HF_HUB_OFFLINE=1)"
+echo "  HF cache       : $HF_HOME   (set HF_HOME on compute nodes, with HF_HUB_OFFLINE=1)"
 echo "  checkpoint     : $RESOLVED_REPO"
 echo
 echo "Quick smoke test on this node (1 dataset, first 2 years, GPU 0 if available):"

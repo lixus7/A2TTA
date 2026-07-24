@@ -24,7 +24,7 @@ Modes: --mode univariate | multivariate (graph-grouped, group_size 64).
 Single seed (LoRA fine-tuning has data-sampling randomness; we fix the seed and,
 like the zero-shot column, report one run without ±std).
 
-Usage (one (dataset, year, mode) shard — what the katana FIFO calls):
+Usage (one (dataset, year, mode) shard — suitable for an HPC array worker):
     python chronos_finetune.py --dataset pems03 --year 2001 --mode univariate --gpuid 0
 
 Outputs (under --out-dir, default run_logs/chronos_ft):
@@ -81,7 +81,7 @@ def train_inputs_multivariate(train, groups):
 # --------------------------------------------------------------------------- #
 # Fine-tune
 # --------------------------------------------------------------------------- #
-def finetune(base_pipeline, inputs, num_steps, lr, batch_size):
+def finetune(base_pipeline, inputs, num_steps, lr, batch_size, seed):
     """LoRA-fine-tune a fresh copy; returns the fine-tuned pipeline.
     context_length=X_LEN so training matches the 12->12 eval task exactly."""
     return base_pipeline.fit(
@@ -94,6 +94,8 @@ def finetune(base_pipeline, inputs, num_steps, lr, batch_size):
         num_steps=num_steps,
         batch_size=batch_size,
         disable_data_parallel=True, # one GPU per job (the FIFO gives us 8)
+        seed=seed,
+        data_seed=seed,
     )
 
 
@@ -159,7 +161,8 @@ def main():
                   "T6_MAPE", "T12_MAE", "T12_RMSE", "T12_MAPE", "Avg_MAE",
                   "Avg_RMSE", "Avg_MAPE", "ft_secs", "secs"]
 
-    print(f"[chronos-ft] {ds} years={years} model={args.model} device={device} "
+    model_label = cb.public_model_label(args.model)
+    print(f"[chronos-ft] {ds} years={years} model={model_label} device={device} "
           f"mode={args.mode} lora steps={args.num_steps} lr={args.lr} "
           f"ft_bs={args.ft_batch_size}", flush=True)
 
@@ -196,7 +199,8 @@ def main():
               f"({args.num_steps} steps)...", flush=True)
         base = cb.load_pipeline(args.model, device, dtype)
         ft0 = time.time()
-        ft = finetune(base, tr_inputs, args.num_steps, args.lr, args.ft_batch_size)
+        ft = finetune(base, tr_inputs, args.num_steps, args.lr,
+                      args.ft_batch_size, args.seed)
         ft_secs = time.time() - ft0
         print(f"[chronos-ft] {ds} {year}: fine-tuned in {ft_secs:.1f}s; forecasting...",
               flush=True)
@@ -214,7 +218,7 @@ def main():
                   f"RMSE {m['RMSE']:.4f}\tMAPE {m['MAPE']:.4f}", flush=True)
         print(f"[chronos-ft] {ds} {year} done in {secs:.1f}s (ft {ft_secs:.1f}s)", flush=True)
 
-        meta = {"dataset": ds, "year": year, "model": args.model, "mode": args.mode,
+        meta = {"dataset": ds, "year": year, "model": model_label, "mode": args.mode,
                 "grouping": args.grouping if args.mode == "multivariate" else "",
                 "group_size": args.group_size if args.mode == "multivariate" else 0,
                 "finetune": "lora", "num_steps": args.num_steps, "lr": args.lr,

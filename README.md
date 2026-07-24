@@ -102,6 +102,16 @@ a2tta/
 └── environment.yaml
 ```
 
+Before publishing, run the privacy check. Site-specific cluster, queue, account,
+user, path, email, and institution markers should be supplied at runtime rather
+than committed:
+
+```bash
+bash scripts/check_public_release.sh
+# Add private words that are specific to your environment:
+PRIVATE_MARKERS_REGEX='cluster-name|queue-name' bash scripts/check_public_release.sh
+```
+
 ---
 
 ## 🚀 Getting started

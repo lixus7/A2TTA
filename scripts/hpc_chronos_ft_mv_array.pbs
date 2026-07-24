@@ -1,0 +1,186 @@
+#!/bin/bash
+#PBS -N C2MV_FT
+#PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:gpu_model=H200
+#PBS -l walltime=12:00:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+resolve_repo() {
+    if [[ -n "${A2TTA_REPO:-}" ]]; then
+        printf '%s\n' "$A2TTA_REPO"
+    elif [[ -n "${PBS_O_WORKDIR:-}" && -f "$PBS_O_WORKDIR/chronos_finetune.py" ]]; then
+        printf '%s\n' "$PBS_O_WORKDIR"
+    else
+        local script_dir
+        script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+        cd -- "$script_dir/.." && pwd
+    fi
+}
+
+REPO=$(resolve_repo)
+PYTHON=${A2TTA_PYTHON:-}
+if [[ -z "$PYTHON" ]]; then
+    PYTHON=$(command -v python3 || command -v python || true)
+fi
+MODEL=${CHRONOS_MODEL:-amazon/chronos-2}
+OUT_DIR="$REPO/run_logs/chronos_ft_mv"
+DATASETS=(pems03 pems04 pems05 pems06 pems07 pems08 pems10 pems11 pems12 tfnsw)
+SEEDS=(51 52 53)
+
+# Multiple queues can receive disjoint lanes from the same global task list.
+# For six total lanes, one submission may get lanes 0--3 and another 4--5.
+TOTAL_LANES=${TOTAL_LANES:?TOTAL_LANES is required}
+QUEUE_LANES=${QUEUE_LANES:?QUEUE_LANES is required}
+LANE_OFFSET=${LANE_OFFSET:?LANE_OFFSET is required}
+
+if [[ -z "$PYTHON" || ! -x "$PYTHON" ]]; then
+    echo "Python is unavailable; set A2TTA_PYTHON to an executable." >&2
+    exit 4
+fi
+
+if (( TOTAL_LANES < 1 || QUEUE_LANES < 1 || LANE_OFFSET < 0 || LANE_OFFSET + QUEUE_LANES > TOTAL_LANES )); then
+    echo "Invalid lane mapping: total=$TOTAL_LANES queue=$QUEUE_LANES offset=$LANE_OFFSET" >&2
+    exit 2
+fi
+
+declare -a TASKS=()
+for dataset in "${DATASETS[@]}"; do
+    if [[ "$dataset" == tfnsw ]]; then
+        raw_dir="$REPO/../tfnsw/RawData"
+    else
+        raw_dir="$REPO/../xxltrafficdata/preprocessed/$dataset/RawData"
+    fi
+    while IFS= read -r raw_file; do
+        year=$(basename "$raw_file" .npz)
+        for seed in "${SEEDS[@]}"; do
+            TASKS+=("$dataset $year $seed")
+        done
+    done < <(compgen -G "$raw_dir/*.npz" | sort)
+done
+
+local_index=${PBS_ARRAY_INDEX:?PBS_ARRAY_INDEX is required}
+local_offset=$((local_index - 1))
+cycle=$((local_offset / QUEUE_LANES))
+lane=$((local_offset % QUEUE_LANES))
+global_offset=$((cycle * TOTAL_LANES + LANE_OFFSET + lane))
+
+if (( local_offset < 0 || global_offset < 0 || global_offset >= ${#TASKS[@]} )); then
+    echo "Mapped task is outside range: local=$local_index global_offset=$global_offset count=${#TASKS[@]}" >&2
+    exit 3
+fi
+read -r DATASET YEAR SEED <<< "${TASKS[$global_offset]}"
+GLOBAL_INDEX=$((global_offset + 1))
+
+if [[ ${CHRONOS_FT_DRY_RUN:-0} == 1 ]]; then
+    echo "TASK_COUNT=${#TASKS[@]}"
+    echo "TOTAL_LANES=$TOTAL_LANES QUEUE_LANES=$QUEUE_LANES LANE_OFFSET=$LANE_OFFSET"
+    echo "PBS_ARRAY_INDEX=$PBS_ARRAY_INDEX GLOBAL_INDEX=$GLOBAL_INDEX DATASET=$DATASET YEAR=$YEAR SEED=$SEED"
+    exit 0
+fi
+
+RESULT="$OUT_DIR/$DATASET/${DATASET}_${YEAR}_ft_mv_graph64_s${SEED}.json"
+
+valid_result() {
+    "$PYTHON" - "$RESULT" "$DATASET" "$YEAR" "$SEED" <<'PY'
+import json
+import os
+import sys
+
+path, dataset, year, seed = sys.argv[1:]
+if not os.path.isfile(path) or os.path.getsize(path) == 0:
+    raise SystemExit(1)
+try:
+    with open(path) as handle:
+        record = json.load(handle)
+    assert record["dataset"] == dataset
+    assert record["year"] == int(year)
+    assert record["seed"] == int(seed)
+    assert record["mode"] == "multivariate"
+    assert record["grouping"] == "graph"
+    assert record["group_size"] == 64
+    assert record["num_steps"] == 500
+    assert record["n_groups"] > 0
+    assert set(record["metrics"]) == {"3", "6", "12", "Avg"}
+except (AssertionError, KeyError, OSError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+PY
+}
+
+if valid_result; then
+    echo "CHRONOS_FT_MV_SKIP_COMPLETE=1"
+    echo "RESULT_FILE=$DATASET/$(basename "$RESULT")"
+    exit 0
+fi
+
+JOB_TAG=${PBS_JOBID%%.*}
+LOCAL_ROOT="/tmp/$USER/chronos_ft_mv_${JOB_TAG}"
+WORK_DIR="$LOCAL_ROOT/A2TTA"
+
+cleanup() {
+    local code=$?
+    trap - EXIT HUP INT TERM
+    pkill -TERM -P $$ 2>/dev/null || true
+    if [[ -n "${LOCAL_ROOT:-}" && "$LOCAL_ROOT" == /tmp/* ]]; then
+        rm -rf -- "$LOCAL_ROOT" 2>/dev/null || true
+    fi
+    exit "$code"
+}
+trap cleanup EXIT HUP INT TERM
+
+if [[ "$MODEL" == /* && ! -e "$MODEL" ]]; then
+    echo "The local CHRONOS_MODEL path is unavailable." >&2
+    exit 5
+fi
+
+mkdir -p "$WORK_DIR" "$OUT_DIR/$DATASET"
+cp "$REPO/chronos_finetune.py" "$REPO/chronos_baseline.py" "$WORK_DIR/"
+ln -s "$REPO/../xxltrafficdata" "$LOCAL_ROOT/xxltrafficdata"
+ln -s "$REPO/../tfnsw" "$LOCAL_ROOT/tfnsw"
+
+export PYTHONNOUSERSITE=1
+export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
+cd "$WORK_DIR"
+
+echo "START_TIME=$(date --iso-8601=seconds)"
+echo "JOB_TAG=$JOB_TAG"
+echo "PBS_ARRAY_INDEX=$PBS_ARRAY_INDEX GLOBAL_INDEX=$GLOBAL_INDEX TASK_COUNT=${#TASKS[@]}"
+echo "TOTAL_LANES=$TOTAL_LANES QUEUE_LANES=$QUEUE_LANES LANE_OFFSET=$LANE_OFFSET"
+echo "DATASET=$DATASET YEAR=$YEAR SEED=$SEED MODE=multivariate GROUPING=graph GROUP_SIZE=64 STEPS=500"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
+echo "OUTPUT_SUBDIR=run_logs/chronos_ft_mv"
+(cd "$WORK_DIR" && sha256sum chronos_finetune.py chronos_baseline.py)
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+"$PYTHON" -c 'import chronos, peft, torch; print("ENV_OK", "torch=" + torch.__version__, "cuda=" + str(torch.cuda.is_available()), "gpus=" + str(torch.cuda.device_count()), flush=True); assert torch.cuda.is_available() and torch.cuda.device_count() == 1'
+
+timeout --signal=TERM --kill-after=30s 41400s \
+    "$PYTHON" "$WORK_DIR/chronos_finetune.py" \
+    --dataset "$DATASET" \
+    --year "$YEAR" \
+    --model "$MODEL" \
+    --mode multivariate \
+    --grouping graph \
+    --group-size 64 \
+    --gpuid 0 \
+    --seed "$SEED" \
+    --num-steps 500 \
+    --ft-batch-size 128 \
+    --fc-batch-size 512 \
+    --out-dir "$OUT_DIR"
+
+if ! valid_result; then
+    echo "Full-run result is missing or invalid." >&2
+    exit 6
+fi
+
+echo "CHRONOS_FT_MV_SHARD_OK=1"
+echo "RESULT_FILE=$DATASET/$(basename "$RESULT")"
+echo "END_TIME=$(date --iso-8601=seconds)"

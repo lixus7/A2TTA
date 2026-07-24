@@ -21,15 +21,15 @@ Models:
 | `scripts/gen_moirai_configs.py` | writes `conf/PEMS*/moirai_{moirai2,moe}_*.json` |
 | `scripts/gen_moirai_ft_configs.py` | writes `conf/PEMS*/moirai_ft_{moirai2,moe}_*.json` |
 | `scripts/setup_moirai_env.sh` | one-time env + checkpoint download |
-| `scripts/katana_moirai.sh` | zero-shot PBS sweep (2×H200, 100h, FIFO, resume) |
-| `scripts/katana_moirai_ft.sh` | fine-tune PBS sweep (2×H200, 100h, FIFO, year-level resume) |
+| `scripts/hpc_moirai.pbs` | zero-shot PBS sweep (multi-GPU, resumable) |
+| `scripts/hpc_moirai_ft.pbs` | fine-tune PBS sweep (multi-GPU, year-level resume) |
 
 ## Environment
 Dedicated conda env **`moirai`** (Python 3.11). uni2ts pins `torch>=2.1,<2.5`,
 incompatible with the `stg`/`chronos`/`timesfm` envs (torch 2.12), hence a
 separate env. `uni2ts==2.0.0` (the first PyPI release shipping Moirai-2.0) +
 `torch==2.4.1+cu121` (supports H200 / sm_90). Checkpoints cached under
-`HF_HOME=./hf_cache`; katana jobs run
+`HF_HOME=./hf_cache`; offline HPC jobs run
 `HF_HUB_OFFLINE=1`.
 
 ```bash
@@ -70,12 +70,12 @@ report mean ± std.
 ## Run
 ```bash
 # zero-shot (deterministic for moirai2; tiny sampling variance for moe -> 1 seed)
-qsub scripts/katana_moirai.sh
-qsub -v MODELS="moirai2" scripts/katana_moirai.sh        # one model only
+qsub scripts/hpc_moirai.pbs
+qsub -v MODELS="moirai2" scripts/hpc_moirai.pbs        # one model only
 
 # fine-tune (3 seeds; year-level resume across 100h resubmissions)
-qsub scripts/katana_moirai_ft.sh
-qsub -v RESUME_FROM=run_logs/moirai_ft_<TS> scripts/katana_moirai_ft.sh   # resume
+qsub scripts/hpc_moirai_ft.pbs
+qsub -v RESUME_FROM=run_logs/moirai_ft_<TS> scripts/hpc_moirai_ft.pbs   # resume
 
 # local smoke (CPU ok): 1 dataset, 2 years, capped windows
 HF_HOME=./hf_cache \

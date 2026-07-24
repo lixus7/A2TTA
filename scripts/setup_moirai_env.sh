@@ -14,7 +14,7 @@
 #      uni2ts==2.0.0 (the PyPI release that ships Moirai-2.0) + tqdm (utils/ dep).
 #   3. Verifies the torch CUDA build supports sm_90 (H200).
 #   4. Pre-downloads BOTH checkpoints into a PERSISTENT cache on a persistent scratch disk so
-#      katana compute nodes (offline) can load them with HF_HUB_OFFLINE=1:
+#      offline compute nodes can load them with HF_HUB_OFFLINE=1:
 #        - Salesforce/moirai-2.0-R-small   (Moirai-2.0, quantile decoder)
 #        - Salesforce/moirai-moe-1.0-R-base (Moirai-MoE base, 0.9B)
 #   5. Regenerates conf/PEMS*/moirai_*.json + moirai_ft_*.json.
@@ -105,7 +105,7 @@ python scripts/gen_moirai_ft_configs.py
 echo
 echo "[setup] DONE."
 echo "  conda env  : $ENV_NAME"
-echo "  HF cache   : $HF_HOME   (set HF_HOME + HF_HUB_OFFLINE=1 on katana)"
+echo "  HF cache   : $HF_HOME   (set HF_HOME + HF_HUB_OFFLINE=1 on compute nodes)"
 echo "  models     : $MODELS"
 echo
 echo "Smoke test (CPU ok, 1 dataset, first 2 years):"

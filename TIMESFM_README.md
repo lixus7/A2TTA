@@ -25,7 +25,7 @@ It is fully self-contained — it does **not** modify `main.py`, `stkec_main.py`
 | `scripts/gen_timesfm_configs.py` | Generates `conf/PEMS*/timesfm_*.json` from each dataset's `retrain_st_*.json` (same years/paths). |
 | `conf/PEMS*/timesfm_*.json` | Per-dataset configs (already generated). |
 | `scripts/setup_timesfm_env.sh` | **One-time, login node:** create the `timesfm` conda env + pre-download the checkpoint. |
-| `scripts/katana_timesfm.sh` | PBS job for katana (multi-GPU, resumable). |
+| `scripts/hpc_timesfm.pbs` | PBS job for an HPC cluster (multi-GPU, resumable). |
 | `scripts/timesfm_run.sh` | Quick interactive single-dataset runner. |
 
 ## How it stays comparable to the other baselines
@@ -68,12 +68,12 @@ HF_HOME=./hf_cache \
     --csv_path run_logs/timesfm_smoke.csv
 ```
 
-### 3. Full run on katana
+### 3. Full run on a PBS cluster
 
 ```bash
-qsub scripts/katana_timesfm.sh
+qsub scripts/hpc_timesfm.pbs
 # subset / override:
-qsub -v DATASETS="PEMS03 PEMS04",GPUS="0 1" scripts/katana_timesfm.sh
+qsub -v DATASETS="PEMS03 PEMS04",GPUS="0 1" scripts/hpc_timesfm.pbs
 ```
 
 Results are written per-job to `run_logs/timesfm_<timestamp>/csv/*.csv` and
